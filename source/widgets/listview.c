@@ -37,6 +37,8 @@
 #include "settings.h"
 #include "theme.h"
 
+#include "timings.h"
+
 /** Default spacing between the elements in the listview. */
 #define DEFAULT_SPACING    2
 
@@ -63,6 +65,7 @@ typedef enum
 typedef struct {
    box *box;
    textbox *textbox;
+   textbox *index;
    icon  *icon;
 } _listview_row;
 
@@ -173,6 +176,7 @@ static void listview_create_row ( listview *lv, _listview_row *row )
 
     row->textbox = NULL;
     row->icon    = NULL;
+    row->index   = NULL;
 
     for ( GList *iter = g_list_first(list); iter != NULL;iter = g_list_next(iter)){
         if ( strcasecmp((char *)iter->data, "element-icon") == 0 ) {
@@ -183,6 +187,9 @@ static void listview_create_row ( listview *lv, _listview_row *row )
         } else if ( strcasecmp ((char *)iter->data, "element-text") == 0 ){
             row->textbox= textbox_create ( WIDGET ( row->box ), WIDGET_TYPE_TEXTBOX_TEXT, "element-text", TB_AUTOHEIGHT|flags, NORMAL, "DDD", 0, 0 );
             box_add ( row->box, WIDGET ( row->textbox ), TRUE);
+        } else if ( strcasecmp ( (char*)iter->data, "element-index" ) == 0 ){
+            row->index= textbox_create ( WIDGET ( row->box ), WIDGET_TYPE_TEXTBOX_TEXT, "element-text", TB_AUTOHEIGHT, NORMAL, " ", 0, 0 );
+            box_add ( row->box, WIDGET ( row->index ), FALSE);
         }
     }
     g_list_free_full ( list, g_free );
@@ -192,7 +199,12 @@ static void listview_create_row ( listview *lv, _listview_row *row )
 static void listview_set_state ( _listview_row r, TextBoxFontType type )
 {
     listview_set_style ( WIDGET(r.box), type);
-    listview_set_style ( WIDGET(r.textbox), type);
+    if ( r.textbox ) {
+        listview_set_style ( WIDGET(r.textbox), type);
+    }
+    if ( r.index ) {
+        listview_set_style ( WIDGET(r.index), type);
+    }
     if ( r.icon ) {
         listview_set_style ( WIDGET(r.icon), type);
     }
@@ -278,6 +290,17 @@ static void update_element ( listview *lv, unsigned int tb, unsigned int index, 
     TextBoxFontType type = ( index & 1 ) == 0 ? NORMAL : ALT;
     type = ( index ) == lv->selected ? HIGHLIGHT : type;
 
+    if ( lv->boxes[tb].index ) {
+        if ( index < 10 ) {
+            char str[2]  = {
+                ((index+1)%10)+'0',
+                '\0'
+            };
+            textbox_text( lv->boxes[tb].index, str );
+        } else {
+            textbox_text( lv->boxes[tb].index, " " );
+        }
+    }
     if ( lv->callback ) {
         lv->callback ( lv->boxes[tb].textbox, lv->boxes[tb].icon, index, lv->udata, &type, full );
         listview_set_state ( lv->boxes[tb], type);
@@ -404,8 +427,22 @@ static void listview_draw ( widget *wid, cairo_t *draw )
                 width -= widget_get_width ( WIDGET ( lv->scrollbar ) );
             }
             unsigned int element_width = ( width ) / lv->cur_columns;
+
+            int d = width - (element_width+spacing_hori)*(lv->cur_columns-1)-element_width;
+            if ( lv->cur_columns > 1)
+            {
+                int diff = d/(lv->cur_columns-1);
+                if ( diff >= 1 ){
+                    spacing_hori+=1;
+                    d -= lv->cur_columns-1;
+                }
+            }
             for ( unsigned int i = 0; i < max; i++ ) {
                 unsigned int ex = left_offset + ( ( i ) / lv->max_rows ) * ( element_width + spacing_hori );
+
+                if ( (i)/lv->max_rows == (lv->cur_columns-1) ) {
+                    ex+=d;
+                }
                 if ( lv->reverse ) {
                     unsigned int ey = wid->h - ( widget_padding_get_bottom ( wid ) + ( ( i ) % lv->max_rows ) * ( lv->element_height + spacing_vert ) ) - lv->element_height;
                     widget_move ( WIDGET(lv->boxes[i].box), ex, ey);
@@ -421,6 +458,7 @@ static void listview_draw ( widget *wid, cairo_t *draw )
                 widget_draw ( WIDGET ( lv->boxes[i].box ), draw );
             }
             lv->rchanged = FALSE;
+
         }
         else {
             for ( unsigned int i = 0; i < max; i++ ) {
@@ -480,10 +518,14 @@ void listview_set_num_elements ( listview *lv, unsigned int rows )
     if ( lv == NULL ) {
         return;
     }
+    TICK_N(__FUNCTION__);
     lv->req_elements = rows;
     listview_set_selected ( lv, lv->selected );
+    TICK_N("Set selected");
     listview_recompute_elements ( lv );
+    TICK_N("recompute elements");
     widget_queue_redraw ( WIDGET ( lv ) );
+    TICK_N("queue redraw");
 }
 
 unsigned int listview_get_selected ( listview *lv )
@@ -926,7 +968,7 @@ void listview_toggle_ellipsizing ( listview *lv )
 {
     if ( lv ) {
         PangoEllipsizeMode mode =  lv->emode;
-        if ( mode == PANGO_ELLIPSIZE_START ) { 
+        if ( mode == PANGO_ELLIPSIZE_START ) {
             mode = PANGO_ELLIPSIZE_MIDDLE;
         } else if ( mode == PANGO_ELLIPSIZE_MIDDLE ) {
             mode = PANGO_ELLIPSIZE_END;
